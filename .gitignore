@@ -8,3 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+plan_revenue_data.csv
+actuals_data.csv
+budget_data.csv
+open_projects_listing.csv
