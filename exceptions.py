@@ -11,6 +11,7 @@ class FilterType(Enum):
 
 open_projects_df = pd.read_csv('open_projects_listing.csv')
 actuals_df = pd.read_csv('actuals_data.csv')
+planned_revenue_df = pd.read_csv('plan_revenue_data.csv')
 budget_df = pd.read_csv('budget_data.csv')
 
 pd.options.display.float_format = '{:,.2f}'.format
@@ -21,6 +22,7 @@ def create_projects_df(open_projects_df, actuals_df, budget_df, month_end):
     open_projects_df.columns = open_projects_df.columns.str.lower()
     actuals_df.columns = actuals_df.columns.str.lower()
     budget_df.columns = budget_df.columns.str.lower()
+    planned_revenue_df.columns = planned_revenue_df.columns.str.lower()
 
     actuals_df['end_date_of_month'] = pd.to_datetime(actuals_df['end_date_of_month'], dayfirst=True,  errors='coerce')
 
@@ -62,6 +64,7 @@ def create_projects_df(open_projects_df, actuals_df, budget_df, month_end):
             .merge(prj_ltd_deferred_revenue_df, on='project_key', how='left')
             .merge(prj_ltd_cost_df, on='project_key', how='left')
             .merge(budget_df, on='project_key', how='left')
+            .merge(planned_revenue_df, on='project_key', how='left')
             .fillna(0)  # Fill NaN values with 0
         )
 
@@ -71,10 +74,28 @@ def create_projects_df(open_projects_df, actuals_df, budget_df, month_end):
 
     return projects_full_df
 
-def calculate_exceptions(df, cost_threshold = 100_000, budget_threshold = 0.3):
+def calculate_budget_exceptions(df, cost_threshold = 100_000, budget_threshold = 0.3):
     # Identify projects with revenue below the threshold
     df['budget_error'] = ((df['ltd_cost'] > cost_threshold) & (df['prj_budgeted_cost'] / df['ltd_cost'] < budget_threshold))
     return df[df['budget_error']]
+
+def calculate_margin_exceptions(df, margin_threshold = 0.3):
+    # Identify projects with margin below the threshold
+    display_df = df.copy()
+    display_df['contracted_revenue'] = display_df[['ltd_billed_revenue', 'planned_revenue']].min(axis=1)
+    display_df['contracted_revenue'] = -display_df['contracted_revenue']
+    display_df['prj_budgeted_revenue'] = -display_df['prj_budgeted_revenue']
+    display_df['planned_margin'] = (display_df['contracted_revenue'] - display_df['prj_budgeted_cost']) / display_df['prj_budgeted_cost']
+    display_df['planned_margin'] = (display_df['planned_margin'].fillna(0)
+                                                                .replace([np.inf, -np.inf], 0) 
+                                    )
+    display_df['project_is_material'] = display_df['contracted_revenue'] > 10_000
+
+    display_df = display_df[(display_df['planned_margin'].abs() > margin_threshold) & (display_df['project_is_material'])]
+
+    display_df = display_df[['project_code', 'project_name', 'functional_area', 'contracted_revenue', 'prj_budgeted_revenue', 'ltd_cost', 'prj_budgeted_cost', 'planned_margin']]
+
+    return display_df
 
 def display_budget_exceptions(df):
 
@@ -100,7 +121,7 @@ def display_budget_exceptions(df):
     cost_thresholds_value = cost_thresholds_dict[st.session_state.project_cost_threshold]
     budget_exception_rate_value = budget_exception_rates_dict[st.session_state.budget_exception_rate]
     
-    display_df = calculate_exceptions(df.copy(), cost_threshold=cost_thresholds_value, budget_threshold=budget_exception_rate_value)
+    display_df = calculate_budget_exceptions(df.copy(), cost_threshold=cost_thresholds_value, budget_threshold=budget_exception_rate_value)
     
     functional_areas_list.extend(display_df['functional_area'].unique().tolist())
     project_managers_list.extend(display_df['project_manager'].unique().tolist())
@@ -151,6 +172,45 @@ def display_budget_exceptions(df):
 
     # Raw Data Section (expandable)
     st.dataframe(display_df, use_container_width=True)
+
+def display_margin_exceptions(df):
+    """Display Projects where the Margin exceeds user defined threshhold"""
+    st.subheader("Margin Exceptions")
+
+    margin_threshold_rates_dict = {"20%": 0.2, "30%": 0.3, "40%": 0.4, "50%": 0.5, "60%": 0.6, "70%": 0.7, "80%": 0.8, "90%": 0.9, "100%": 1.0}
+    margin_functional_areas_list = ['All']
+    
+    if 'margin_threshold' not in st.session_state:
+        st.session_state.margin_threshold = list(margin_threshold_rates_dict.keys())[1]
+    
+    if 'margin_functional_area' not in st.session_state:
+        st.session_state.margin_functional_area = 'All'
+
+    margin_threshold_value = margin_threshold_rates_dict[st.session_state.margin_threshold]
+    display_df = calculate_margin_exceptions(df, margin_threshold=margin_threshold_value)
+
+    margin_functional_areas_list.extend(display_df['functional_area'].unique().tolist())
+
+    if st.session_state.margin_functional_area != 'All':
+        display_df = display_df[display_df['functional_area'] == st.session_state.margin_functional_area]
+
+    subtitle = f'There are {len(display_df)} projects where the margin exceeds {st.session_state.margin_threshold}.'
+
+    st.subheader('Margin Exceptions')
+    st.warning(subtitle)
+
+    col1, _, col2 = st.columns([3, 2, 3,])
+
+    with col1:
+        st.selectbox("Select Functional Area", options=margin_functional_areas_list, key="margin_functional_area")
+    with col2:
+        st.selectbox("Select Cost Threshold", options=margin_threshold_rates_dict.keys(), key="margin_threshold") 
+
+    display_df[['contracted_revenue', 'prj_budgeted_revenue', 'ltd_cost', 'prj_budgeted_cost']] = display_df[['contracted_revenue', 'prj_budgeted_revenue', 'ltd_cost', 'prj_budgeted_cost']].map(lambda x: f"${x:,.0f}")
+    display_df['planned_margin'] = display_df['planned_margin'].map(lambda x: f"{x:.0%}")
+
+    st.dataframe(display_df, use_container_width=True)
+
 
 def display_inactive_projects(df):
     
@@ -222,12 +282,15 @@ def main():
         return
     st.markdown("---")
 
-    tab1, tab2 = st.tabs(["Budget Exceptions", "Inactive Projects with Deferred Revenue "])
+    tab1, tab2, tab3 = st.tabs(['Project Budget Exceptions', 'Project Margin Exceptions', 'Inactive Projects with Deferred Revenue'])
 
     with tab1:
         display_budget_exceptions(df)
 
     with tab2:
+        display_margin_exceptions(df)
+
+    with tab3:
         display_inactive_projects(df)
 
     st.markdown("---")

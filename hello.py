@@ -113,8 +113,6 @@ def calculate_metrics(df):
     # create contracted_revenue = min of ltd_billed_revenue and planned_revenue
     df_calc['contracted_revenue'] = df_calc[['ltd_billed_revenue', 'planned_revenue']].min(axis=1)
 
-    df_calc['project_is_material'] = df_calc['contracted_revenue'] < -10_000
-
     df_calc['percentage_completion'] = df['ltd_cost'] / (df_calc['prj_budgeted_cost'] + df_calc['budget_adj'])
 
     # Replace NaN, inf, and -inf with 0, then clip between 0 and 1
@@ -124,8 +122,15 @@ def calculate_metrics(df):
                                         .clip(0, 1)
                                         )
 
+
+    # Business Rule: Any project with less than $10,000 contracted revenue is deemed immaterial, therefore set completion to 100%
+    df_calc['project_is_material'] = df_calc['contracted_revenue'] < -10_000 
     df_calc['percentage_completion'] = df_calc['percentage_completion'].where(df_calc['project_is_material'], 1)
 
+    # Business Rule: If Project budget is less than $10,000 the project has not entered the construction phase, therefore set the completion to 0%
+    df_calc['percentage_completion'] = df_calc['percentage_completion'].where(df_calc['prj_budgeted_cost'] >= 10_000, 0)
+
+    # Calculate Revenue Adjustment based on the contracted revenue and the percentage completion
     df_calc['revenue_adj'] = (
         df_calc['contracted_revenue'] * df_calc['percentage_completion'] - (df_calc['ltd_billed_revenue'] + df_calc['ltd_deferred_revenue'])
     )
@@ -238,7 +243,7 @@ def main():
     with col2:
         # Filter selectbox
         filter_selection = st.selectbox(
-            "Filter Projects",
+            "Filter for Project Type (Capital/ACS)",
             options=[filter_type.value for filter_type in FilterType],
             key="filter_selectbox"
         )
