@@ -91,7 +91,7 @@ def create_projects_df(open_projects_df, actuals_df, budget_df, planned_revenue_
             .fillna(0)  # Fill NaN values with 0
         )
 
-    excluded_projects = ['NC-006914']
+    excluded_projects = ['NC-006914','NC-007005']
 
     projects_full_df = projects_full_df[~projects_full_df['project_code'].isin(excluded_projects)]
 
@@ -137,63 +137,82 @@ def calculate_metrics(df):
 
     return df_calc
 
-def significant_project_component(project_data, df_original, row_index):
+@st.fragment
+def significant_project_component(project_data, df_original):
     """Create a component for displaying and adjusting significant project data"""
     
     # Create a container for the project
     with st.container():
-        st.markdown(f"### {project_data['functional_area']}: {project_data['project_code']} - {project_data['project_name']}")
         
+
         project_key = project_data['project_key']
-        budget_adj = st.session_state[f'adj_{project_key}'] if f'adj_{project_key}' in st.session_state else project_data['budget_adj']
+
+        if f'adj_{project_key}' not in st.session_state:
+            st.session_state[f'adj_{project_key}'] = project_data['budget_adj']
+
         prj_budgeted_cost = project_data['prj_budgeted_cost']
+        
+        budget_adj = st.session_state[f'adj_{project_key}'] 
         ltd_cost = project_data['ltd_cost']
         percentage_completion = ltd_cost / (prj_budgeted_cost + budget_adj) if (prj_budgeted_cost + budget_adj) != 0 else 0
         percentage_completion = min(max(percentage_completion, 0), 1)
-        ltd_revenue = -project_data['contracted_revenue'] * percentage_completion
 
+        revenue_adj = (project_data['contracted_revenue'] * percentage_completion - (project_data['ltd_billed_revenue'] + project_data['ltd_deferred_revenue']))
+        contracted_revenue = project_data['contracted_revenue']
+        mtd_revenue = project_data['mtd_revenue']
 
+        col1, _, col2 = st.columns([9, 1,2])
 
-        # Create 6 columns for metrics
-        col1, col2, col3, col4, col5, col6 = st.columns([1, 1, 1, 1, 1, 1])
-        
         with col1:
-            st.markdown(f"<div style='font-size: 1em;'><strong>LTD Revenue</strong><br>${ltd_revenue:,.0f}</div>", unsafe_allow_html=True)
-
+            st.markdown(f"#### {project_data['functional_area']}: {project_data['project_code']} - {project_data['project_name']}")
+        
         with col2:
-            st.markdown(f"<div style='font-size: 1em;'><strong>LTD Costs</strong><br>${ltd_cost:,.0f}</div>", unsafe_allow_html=True)
+            if st.button("💾 Save changes", key=f"commit_{project_key}", type="secondary"):
+                # Update the original dataframe
+                df_original.loc[df_original['project_key'] == project_key, 'budget_adj'] = budget_adj
+                st.success(f"Budget adjustment of ${budget_adj:,.0f} saved for {project_data['project_code']}")
+                st.rerun()  # Trigger full app rerun to update other components
+
+    
+        # Create 6 columns for metrics
+        col1, col2, col3, col4, col5, col6, col7 = st.columns([1, 1, 1, 1, 1, 1, 1])
+
+        with col1:
+            st.markdown(f"<div style='font-size: 1em;'><strong>MTD Revenue</strong><br>${-mtd_revenue:,.0f}</div>", unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown(f"<div style='font-size: 1em;'><strong>Proposed Adjustment</strong><br>${-revenue_adj:,.0f}</div>", unsafe_allow_html=True)
 
         with col3:
-            st.markdown(f"<div style='font-size: 1em;'><strong>LTD Budget (incl Adj)</strong><br>${(prj_budgeted_cost + budget_adj):,.0f}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='font-size: 1em;'><strong>Contracted/Billed Revenue</strong><br>${-contracted_revenue:,.0f}</div>", unsafe_allow_html=True)
 
         with col4:
-            st.markdown(f"<div style='font-size: 1em;'><strong>Completion %</strong><br>{percentage_completion:.2%}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='font-size: 1em;'><strong>LTD Costs</strong><br>${ltd_cost:,.0f}</div>", unsafe_allow_html=True)
 
         with col5:
-            # Numerical input field for revenue adjustment
-            adjustment = st.number_input(
-                "Revenue Adj",
-                value=float(project_data['budget_adj']),
+            st.markdown(f"<div style='font-size: 1em;'><strong>LTD Budget (incl Adj)</strong><br>${(prj_budgeted_cost + budget_adj):,.0f}</div>", unsafe_allow_html=True)
+
+        with col6:
+            st.markdown(f"<div style='font-size: 1em;'><strong>Completion %</strong><br>{percentage_completion:.2%}</div>", unsafe_allow_html=True)
+
+        with col7:
+            # Numerical input field for revenue adjustment - only affects this fragment
+            st.number_input(
+                "Budget Adjustment",
+                value=float(st.session_state[f'adj_{project_key}']),
                 step=1000.0,
                 format="%.0f",
                 key=f"adj_{project_key}",
                 label_visibility="visible"
             )
 
-        with col6:
-            # Commit button
-            if st.button("💾 Commit", key=f"commit_{project_key}", type="secondary"):
-                # Update the original dataframe
-                df_original.loc[row_index, 'revenue_adj'] = adjustment
-                st.success(f"Revenue adjustment of ${adjustment:,.0f} committed for {project_data['project_code']}")
-                st.rerun()
         
         # Show adjustment details
-        if adjustment != project_data['revenue_adj']:
-            st.caption(f"⚠️ Uncommitted change: ${adjustment - project_data['revenue_adj']:,.0f}")
-        elif adjustment != 0:
-            st.caption(f"✅ Current adjustment: ${adjustment:,.0f}")
-        
+        if budget_adj != project_data['budget_adj']:
+            st.caption(f"⚠️ Uncommitted change: ${budget_adj - project_data['budget_adj']:,.0f}")
+        elif budget_adj != 0:
+            st.caption(f"✅ Current adjustment: ${budget_adj:,.0f}")
+
         st.markdown("---")
 
 
@@ -233,7 +252,7 @@ def main():
     # Always show original data first with basic calculations
     df_calc = calculate_metrics(df)
 
-    col1, buffer, col2 = st.columns([3, 1, 5])
+    col1, _, col2 = st.columns([3, 1, 5])
     with col1:
         st.toggle("Show Adjustments", key="show_adjustments")
         if st.session_state.show_adjustments:
@@ -331,8 +350,7 @@ def main():
 
     # Display each project using the component
     for index, project_row in ranked_projects.iterrows():
-        row_index = df_calc.index[df_calc['project_key'] == project_row['project_key']].tolist()[0]
-        significant_project_component(project_row, df_calc, row_index)
+        significant_project_component(project_row, df_calc)
 
 
     
