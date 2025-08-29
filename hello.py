@@ -91,29 +91,29 @@ def create_projects_df(open_projects_df, actuals_df, budget_df, planned_revenue_
             .fillna(0)  # Fill NaN values with 0
         )
 
-    excluded_projects = ['NC-006914','NC-007005']
 
+    projects_full_df['budget_adj'] = 0
+    projects_full_df['revenue_adj'] = 0
+
+    projects_full_df['is_capital'] = projects_full_df['functional_area'].str.startswith('L')
+    projects_full_df['mtd_cost'] = projects_full_df['mtd_direct_cost'] + projects_full_df['mtd_oh'].where(projects_full_df['is_capital'], 0)
+    projects_full_df['ltd_revenue'] = projects_full_df['ltd_billed_revenue'] + projects_full_df['ltd_deferred_revenue']
+
+    projects_full_df['contracted_revenue'] = projects_full_df[['ltd_billed_revenue', 'planned_revenue']].min(axis=1)
+
+    projects_full_df['project_is_material'] = projects_full_df['contracted_revenue'] < -10_000
+
+    # drop a specific project code from the DataFrame
+    excluded_projects = ['NC-006914','NC-007005']
     projects_full_df = projects_full_df[~projects_full_df['project_code'].isin(excluded_projects)]
 
     return projects_full_df
 
-def calculate_metrics(df):
+def calculate_revenue_adj(df_calc):
     """Calculate revenue adjustments based on completion percentage and update metrics"""
-    df_calc = df.copy()
 
-    df_calc['budget_adj'] = 0
-    df_calc['revenue_adj'] = 0
-    # drop a specific project code from the DataFrame
 
-    # mtd_cost = direct costs + overheads if the functional_area starts with 'L' otherwise just direct costs
-    df_calc['is_capital'] = df_calc['functional_area'].str.startswith('L')
-    df_calc['mtd_cost'] = df_calc['mtd_direct_cost'] + df_calc['mtd_oh'].where(df_calc['is_capital'], 0)
-    df_calc['ltd_revenue'] = df_calc['ltd_billed_revenue'] + df_calc['ltd_deferred_revenue']
-
-    # create contracted_revenue = min of ltd_billed_revenue and planned_revenue
-    df_calc['contracted_revenue'] = df_calc[['ltd_billed_revenue', 'planned_revenue']].min(axis=1)
-
-    df_calc['percentage_completion'] = df['ltd_cost'] / (df_calc['prj_budgeted_cost'] + df_calc['budget_adj'])
+    df_calc['percentage_completion'] = df_calc['ltd_cost'] / (df_calc['prj_budgeted_cost'] + df_calc['budget_adj'])
 
     # Replace NaN, inf, and -inf with 0, then clip between 0 and 1
     df_calc['percentage_completion'] = (df_calc['percentage_completion']
@@ -124,7 +124,6 @@ def calculate_metrics(df):
 
 
     # Business Rule: Any project with less than $10,000 contracted revenue is deemed immaterial, therefore set completion to 100%
-    df_calc['project_is_material'] = df_calc['contracted_revenue'] < -10_000 
     df_calc['percentage_completion'] = df_calc['percentage_completion'].where(df_calc['project_is_material'], 1)
 
     # Business Rule: If Project budget is less than $10,000 the project has not entered the construction phase, therefore set the completion to 0%
@@ -135,145 +134,15 @@ def calculate_metrics(df):
         df_calc['contracted_revenue'] * df_calc['percentage_completion'] - (df_calc['ltd_billed_revenue'] + df_calc['ltd_deferred_revenue'])
     )
 
-    return df_calc
-
 @st.fragment
-def significant_project_component(project_data, df_original):
-    """Create a component for displaying and adjusting significant project data"""
-    
-    # Create a container for the project
-    with st.container():
-        
+def summary_metrics_fragment():
+    """Fragment for displaying summary metrics that can be updated independently"""
+    display_df = st.session_state.project_data_df
 
-        project_key = project_data['project_key']
-
-        if f'adj_{project_key}' not in st.session_state:
-            st.session_state[f'adj_{project_key}'] = project_data['budget_adj']
-
-        prj_budgeted_cost = project_data['prj_budgeted_cost']
-        
-        budget_adj = st.session_state[f'adj_{project_key}'] 
-        ltd_cost = project_data['ltd_cost']
-        percentage_completion = ltd_cost / (prj_budgeted_cost + budget_adj) if (prj_budgeted_cost + budget_adj) != 0 else 0
-        percentage_completion = min(max(percentage_completion, 0), 1)
-
-        revenue_adj = (project_data['contracted_revenue'] * percentage_completion - (project_data['ltd_billed_revenue'] + project_data['ltd_deferred_revenue']))
-        contracted_revenue = project_data['contracted_revenue']
-        mtd_revenue = project_data['mtd_revenue']
-
-        col1, _, col2 = st.columns([9, 1,2])
-
-        with col1:
-            st.markdown(f"#### {project_data['functional_area']}: {project_data['project_code']} - {project_data['project_name']}")
-        
-        with col2:
-            if st.button("💾 Save changes", key=f"commit_{project_key}", type="secondary"):
-                # Update the original dataframe
-                df_original.loc[df_original['project_key'] == project_key, 'budget_adj'] = budget_adj
-                st.success(f"Budget adjustment of ${budget_adj:,.0f} saved for {project_data['project_code']}")
-                st.rerun()  # Trigger full app rerun to update other components
-
-    
-        # Create 6 columns for metrics
-        col1, col2, col3, col4, col5, col6, col7 = st.columns([1, 1, 1, 1, 1, 1, 1])
-
-        with col1:
-            st.markdown(f"<div style='font-size: 1em;'><strong>MTD Revenue</strong><br>${-mtd_revenue:,.0f}</div>", unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown(f"<div style='font-size: 1em;'><strong>Proposed Adjustment</strong><br>${-revenue_adj:,.0f}</div>", unsafe_allow_html=True)
-
-        with col3:
-            st.markdown(f"<div style='font-size: 1em;'><strong>Contracted/Billed Revenue</strong><br>${-contracted_revenue:,.0f}</div>", unsafe_allow_html=True)
-
-        with col4:
-            st.markdown(f"<div style='font-size: 1em;'><strong>LTD Costs</strong><br>${ltd_cost:,.0f}</div>", unsafe_allow_html=True)
-
-        with col5:
-            st.markdown(f"<div style='font-size: 1em;'><strong>LTD Budget (incl Adj)</strong><br>${(prj_budgeted_cost + budget_adj):,.0f}</div>", unsafe_allow_html=True)
-
-        with col6:
-            st.markdown(f"<div style='font-size: 1em;'><strong>Completion %</strong><br>{percentage_completion:.2%}</div>", unsafe_allow_html=True)
-
-        with col7:
-            # Numerical input field for revenue adjustment - only affects this fragment
-            st.number_input(
-                "Budget Adjustment",
-                value=float(st.session_state[f'adj_{project_key}']),
-                step=1000.0,
-                format="%.0f",
-                key=f"adj_{project_key}",
-                label_visibility="visible"
-            )
-
-        
-        # Show adjustment details
-        if budget_adj != project_data['budget_adj']:
-            st.caption(f"⚠️ Uncommitted change: ${budget_adj - project_data['budget_adj']:,.0f}")
-        elif budget_adj != 0:
-            st.caption(f"✅ Current adjustment: ${budget_adj:,.0f}")
-
-        st.markdown("---")
-
-
-def main():
-    st.set_page_config(
-        page_title="Revenue Recognition Dashboard",
-        page_icon="",
-        layout="wide"
-    )
-    
-    # Initialise session state for showing/hiding adjustments
-    if 'show_adjustments' not in st.session_state:
-        st.session_state.show_adjustments = False
-    
-    # Initialise session state for filter type
-    if 'type_filter' not in st.session_state:
-        st.session_state.type_filter = FilterType.ALL.value
-
-    # Initialise session state for number of top projects
-    if 'top_n_projects' not in st.session_state:
-        st.session_state.top_n_projects = 10
-
-    st.title("Revenue Recognition Dashboard")
-      
-    # Set month end date for data filtering
-    month_end = pd.Timestamp('2025-07-31')  # Current reporting month
-    
-    # Create projects dataframe using the new function
-    try:
-        df = create_projects_df(open_projects_df, actuals_df, budget_df, planned_revenue_df, month_end)
-        st.success(f"Loaded {len(df)} projects for analysis")
-    except Exception as e:
-        st.error(f"Error loading project data: {e}")
-        return
-    st.markdown("---")
-    
-    # Always show original data first with basic calculations
-    df_calc = calculate_metrics(df)
-
-    col1, _, col2 = st.columns([3, 1, 5])
-    with col1:
-        st.toggle("Show Adjustments", key="show_adjustments")
-        if st.session_state.show_adjustments:
-            st.success("Margin including Revenue Recognition Adjustments")
-        else:
-            st.info("Margin without Revenue Recognition Adjustments")
-    with col2:
-        # Filter selectbox
-        filter_selection = st.selectbox(
-            "Filter for Project Type (Capital/ACS)",
-            options=[filter_type.value for filter_type in FilterType],
-            key="filter_selectbox"
-        )
-        st.session_state.type_filter = filter_selection
-    # Summary Section
-
-    display_df = df_calc.copy()
     if st.session_state.type_filter == FilterType.CAPITAL.value:
         display_df = display_df[display_df['is_capital']]
     elif st.session_state.type_filter == FilterType.ACS.value:
-        display_df = display_df[~display_df['is_capital']] 
+        display_df = display_df[~display_df['is_capital']]
 
     st.header("Monthly Summary")
 
@@ -281,9 +150,9 @@ def main():
     total_mtd_revenue = -display_df['mtd_revenue'].sum() + total_mtd_revenue_adj
     total_mtd_cost = display_df['mtd_cost'].sum()
     total_mtd_margin = total_mtd_revenue - total_mtd_cost
-    
-    col1, col2, col3 = st.columns(3)
-    
+
+    col1, col2, col3, col4 = st.columns([3,3,3,1])
+
     with col1:
         st.metric(
             label="MTD Revenue",
@@ -305,11 +174,24 @@ def main():
             delta=f"{(total_mtd_margin/total_mtd_revenue)*100:.0f}%" if total_mtd_revenue > 0 else "0%"
         )
     
-    st.markdown("---")
-    
-    # Bar Chart Section
+    with col4:
+        if st.button('Recalculate Adjustments'):
+            calculate_revenue_adj(st.session_state.project_data_df)
+            # Trigger recalculation of fragments
+
+
+@st.fragment  
+def charts_fragment():
+    """Fragment for displaying charts that can be updated independently"""
     st.header("MTD Revenue vs Costs")
-    
+
+    display_df = st.session_state.project_data_df
+
+    if st.session_state.type_filter == FilterType.CAPITAL.value:
+        display_df = display_df[display_df['is_capital']]
+    elif st.session_state.type_filter == FilterType.ACS.value:
+        display_df = display_df[~display_df['is_capital']]
+
     # Create data for side-by-side bars
     chart_data = display_df.groupby('functional_area').agg({'mtd_revenue': 'sum', 'revenue_adj': 'sum' , 'mtd_cost': 'sum'}).reset_index()
     chart_data['revenue_adj'] = chart_data['revenue_adj'] if st.session_state.show_adjustments else 0
@@ -328,9 +210,159 @@ def main():
 
     st.bar_chart(chart_data, x='Functional Area', y='amount', color='metric', use_container_width=True, stack=False)
 
+@st.fragment
+def significant_project_component(project_key):
+    """Create a component for displaying and adjusting significant project data"""
+    
+    # Get project data from session state dataframe
+    project_data_df = st.session_state.project_data_df
+    project_data = project_data_df[project_data_df['project_key'] == project_key].iloc[0]
+    
+    # Create a container for the project
+    with st.container():
+
+        prj_budgeted_cost = project_data['prj_budgeted_cost']
+        
+        # Use the budget_adj from the dataframe directly
+        budget_adj = project_data['budget_adj']
+        ltd_cost = project_data['ltd_cost']
+        percentage_completion = ltd_cost / (prj_budgeted_cost + budget_adj) if (prj_budgeted_cost + budget_adj) != 0 else 0
+        percentage_completion = min(max(percentage_completion, 0), 1)
+
+        revenue_adj = (project_data['contracted_revenue'] * percentage_completion - (project_data['ltd_billed_revenue'] + project_data['ltd_deferred_revenue']))
+        
+        mtd_cost = project_data['mtd_cost']
+        mtd_revenue = project_data['mtd_revenue']
+
+        col1, _, col2 = st.columns([9, 1,2])
+
+        with col1:
+            st.markdown(f"#### {project_data['functional_area']}: {project_data['project_code']} - {project_data['project_name']}")
+        
+        with col2:
+            # Budget adjustment input - use current dataframe value
+            new_budget_adj = st.number_input(
+                "Budget Adjustment",
+                value=float(project_data['budget_adj']),
+                step=1000.0,
+                format="%.0f",
+                key=f"adj_{project_key}",
+                label_visibility="collapsed"
+            )
+            
+            if st.button("💾 Save", key=f"commit_{project_key}", type="secondary"):
+                # Update the shared dataframe in session state
+                st.session_state.project_data_df.loc[st.session_state.project_data_df['project_key'] == project_key, 'budget_adj'] = new_budget_adj
+                # Recalculate revenue adjustments for the entire dataframe
+                calculate_revenue_adj(st.session_state.project_data_df)
+                st.success(f"Budget adjustment of ${new_budget_adj:,.0f} saved!")
+                # Only rerun this fragment, not the whole app
+                st.rerun(scope="fragment")
+
+        # Create 6 columns for metrics
+        col1, col2, col3, col4, col5, col6 = st.columns([1, 1, 1, 1, 1, 1])
+
+        with col1:
+            st.markdown(f"<div style='font-size: 1em;'><strong>MTD Revenue</strong><br>${-mtd_revenue:,.0f}</div>", unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown(f"<div style='font-size: 1em;'><strong>MTD Cost</strong><br>${mtd_cost:,.0f}</div>", unsafe_allow_html=True)
+
+        with col3:
+            st.markdown(f"<div style='font-size: 1em;'><strong>Proposed Adjustment</strong><br>${-revenue_adj:,.0f}</div>", unsafe_allow_html=True)
+
+        with col4:
+            st.markdown(f"<div style='font-size: 1em;'><strong>LTD Costs</strong><br>${ltd_cost:,.0f}</div>", unsafe_allow_html=True)
+
+        with col5:
+            st.markdown(f"<div style='font-size: 1em;'><strong>LTD Budget (incl Adj)</strong><br>${(prj_budgeted_cost + new_budget_adj):,.0f}</div>", unsafe_allow_html=True)
+
+        with col6:
+            st.markdown(f"<div style='font-size: 1em;'><strong>Completion %</strong><br>{percentage_completion:.2%}</div>", unsafe_allow_html=True)
+
+        # Show adjustment details
+        saved_value = st.session_state.get(f"saved_adj_{project_key}", project_data['budget_adj'])
+        if new_budget_adj != saved_value:
+            st.caption(f"⚠️ Unsaved change: ${new_budget_adj - saved_value:,.0f}")
+        elif new_budget_adj != 0:
+            st.caption(f"✅ Current adjustment: ${new_budget_adj:,.0f}")
+
+        st.markdown("---")
+
+
+def main():
+    st.set_page_config(
+        page_title="Revenue Recognition Dashboard",
+        page_icon="",
+        layout="wide"
+    )
+    
+    # Set month end date for data filtering
+    month_end = pd.Timestamp('2025-07-31')  # Current reporting month
+        
+    # Initialise the data and store as project_data session_state
+    if 'project_data_df' not in st.session_state:
+        try:
+            st.session_state.project_data_df = create_projects_df(open_projects_df, actuals_df, budget_df, planned_revenue_df, month_end)
+            # Calculate initial revenue adjustments
+            calculate_revenue_adj(st.session_state.project_data_df)
+        except Exception as e:
+            st.error(f"Error loading project data: {e}")
+            return
+
+    # Initialise session state for showing/hiding adjustments
+    if 'show_adjustments' not in st.session_state:
+        st.session_state.show_adjustments = False
+    
+    # Initialise session state for filter type
+    if 'type_filter' not in st.session_state:
+        st.session_state.type_filter = FilterType.ALL.value
+
+    # Initialise session state for number of top projects
+    if 'top_n_projects' not in st.session_state:
+        st.session_state.top_n_projects = 10
+
+    st.title("Revenue Recognition Dashboard")
+    
+    # Create projects dataframe using the new function
+    
+    # Create or update projects dataframe in session state
+    
+    
+    # Use the dataframe from session state
+    project_data_df = st.session_state.project_data_df
+    st.markdown("---")
+    
+    # Remove the calculate_revenue_adj call here since it's done during initialization
+
+    col1, _, col2 = st.columns([3, 1, 5])
+    with col1:
+        st.toggle("Show Adjustments", key="show_adjustments")
+        if st.session_state.show_adjustments:
+            st.success("Margin including Revenue Recognition Adjustments")
+        else:
+            st.info("Margin without Revenue Recognition Adjustments")
+    with col2:
+        # Filter selectbox
+        filter_selection = st.selectbox(
+            "Filter for Project Type (Capital/ACS)",
+            options=[filter_type.value for filter_type in FilterType],
+            key="filter_selectbox"
+        )
+        st.session_state.type_filter = filter_selection
+    
+    
+    # Summary Section
+    summary_metrics_fragment()
+
+    st.markdown("---")
+    
+    # Bar Chart Section as Fragment
+    charts_fragment()
+
     ###
     st.markdown("---")
-    # st.dataframe(df_calc, use_container_width=True)
+    # st.dataframe(project_data_df, use_container_width=True)
     
     # Top Projects Analysis with Budget Adjustments
     st.header("Top Projects - Analysis & Budget Adjustments")
@@ -339,18 +371,24 @@ def main():
     # user inputs for top N projects
     st.session_state.top_n_projects = st.selectbox(
         label="Select number of top projects to display",
-        options=[10, 15, 20, 25],
+        options=[10, 15, 20],
     )
 
     # Sort by either MTD revenue or MTD costs (whichever is higher for each project)
-    ranked_projects = display_df.copy()
+    ranked_projects = project_data_df.copy()
+
+    if st.session_state.type_filter == FilterType.CAPITAL.value:
+        ranked_projects = ranked_projects[ranked_projects['is_capital']]
+    elif st.session_state.type_filter == FilterType.ACS.value:
+        ranked_projects = ranked_projects[~ranked_projects['is_capital']]
+
     ranked_projects['display_revenue'] = (ranked_projects['mtd_revenue'] + ranked_projects['revenue_adj']).abs()
     ranked_projects['max_mtd_value'] = ranked_projects[['display_revenue', 'mtd_cost']].max(axis=1)
     ranked_projects = ranked_projects.nlargest(st.session_state.top_n_projects, 'max_mtd_value')
 
     # Display each project using the component
     for index, project_row in ranked_projects.iterrows():
-        significant_project_component(project_row, df_calc)
+        significant_project_component(project_row['project_key'])
 
 
     
@@ -358,7 +396,7 @@ def main():
     
     # Raw Data Section (expandable)
     with st.expander("📋 View Raw Data"):
-        st.dataframe(df_calc, use_container_width=True)
+        st.dataframe(project_data_df, use_container_width=True)
     
 
 if __name__ == "__main__":
