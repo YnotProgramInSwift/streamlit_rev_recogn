@@ -104,7 +104,7 @@ def create_projects_df(open_projects_df, actuals_df, budget_df, planned_revenue_
     projects_full_df['project_is_material'] = projects_full_df['contracted_revenue'] < -10_000
 
     # drop a specific project code from the DataFrame
-    excluded_projects = ['NC-006914','NC-007005']
+    excluded_projects = ['NC-006914','NC-007005','CP-011245']
     projects_full_df = projects_full_df[~projects_full_df['project_code'].isin(excluded_projects)]
 
     return projects_full_df
@@ -171,7 +171,6 @@ def summary_metrics_component():
             delta=f"{(total_mtd_margin/total_mtd_revenue)*100:.0f}%" if total_mtd_revenue > 0 else "0%"
         )
     
-
 def charts_component():
     """Component for displaying charts that can be updated independently"""
     st.header("MTD Revenue vs Costs")
@@ -223,8 +222,9 @@ def significant_project_component(project_key):
         percentage_completion = ltd_cost / prj_forecast if prj_forecast != 0 else 0
         percentage_completion = min(max(percentage_completion, 0), 1)
         contracted_revenue = project_data['contracted_revenue']
-        revenue_adj = (contracted_revenue * percentage_completion - (project_data['ltd_billed_revenue'] + project_data['ltd_deferred_revenue']))
-        
+        recognised_revenue = project_data['ltd_billed_revenue'] + project_data['ltd_deferred_revenue']
+        revenue_adj = (contracted_revenue * percentage_completion - recognised_revenue)
+
         mtd_cost = project_data['mtd_cost']
         mtd_revenue = project_data['mtd_revenue']
 
@@ -254,7 +254,7 @@ def significant_project_component(project_key):
                 st.rerun(scope="fragment")
 
         # Create 6 columns for metrics
-        col1, col2, col3, col4, col5, col6, col7, col8  = st.columns([1, 1, 1, 1, 1, 1, 1, 1])
+        col1, col2, col3, col4, col5, col6, col7, col8, col9 = st.columns([1, 1, 1, 1, 1, 1, 1, 1.5, 1.5])
 
         with col1:
             st.markdown(f"<div style='font-size: 1em;'><strong>MTD Revenue</strong><br>${-mtd_revenue:,.0f}</div>", unsafe_allow_html=True)
@@ -263,23 +263,25 @@ def significant_project_component(project_key):
             st.markdown(f"<div style='font-size: 1em;'><strong>MTD Cost</strong><br>${mtd_cost:,.0f}</div>", unsafe_allow_html=True)
 
         with col3:
-            st.markdown(f"<div style='font-size: 1em;'><strong>Adjustment</strong><br>${-revenue_adj:,.0f}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='font-size: 1em;'><strong>Adjustment </strong><br>${-revenue_adj:,.0f}</div>", unsafe_allow_html=True)
 
         with col4:
-            st.markdown(f"<div style='font-size: 1em;'><strong>Contracted Revenue</strong><br>${-contracted_revenue:,.0f}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='font-size: 1em;'><strong>LTD Costs </strong><br>${ltd_cost:,.0f}</div>", unsafe_allow_html=True)
 
         with col5:
-            st.markdown(f"<div style='font-size: 1em;'><strong>LTD Costs</strong><br>${ltd_cost:,.0f}</div>", unsafe_allow_html=True)
-
-        with col6:
             st.markdown(f"<div style='font-size: 1em;'><strong>Budget </strong><br>${prj_budgeted_cost :,.0f}</div>", unsafe_allow_html=True)
 
-        with col7:
+        with col6:
             st.markdown(f"<div style='font-size: 1em;'><strong>Forecast </strong><br>${prj_forecast:,.0f}</div>", unsafe_allow_html=True)
 
-        with col8:
+        with col7:
             st.markdown(f"<div style='font-size: 1em;'><strong>Completion %</strong><br>{percentage_completion:.2%}</div>", unsafe_allow_html=True)
 
+        with col8:
+            st.markdown(f"<div style='font-size: 1em;'><strong>Contracted Revenue</strong><br>${-contracted_revenue:,.0f}</div>", unsafe_allow_html=True)
+
+        with col9:
+            st.markdown(f"<div style='font-size: 1em;'><strong>Recognised Revenue</strong><br>${-recognised_revenue:,.0f}</div>", unsafe_allow_html=True)   
         # Show adjustment details
         saved_value = st.session_state.get(f"saved_adj_{project_key}", project_data['prj_forecast'])
         if prj_forecast != saved_value:
@@ -306,6 +308,14 @@ def main():
         except Exception as e:
             st.error(f"Error loading project data: {e}")
             return
+    
+    if 'top_projects_df' not in st.session_state:
+        top_projects_df = st.session_state.project_data_df
+        top_projects_df['display_revenue'] = (top_projects_df['mtd_revenue'] + top_projects_df['revenue_adj']).abs()
+        top_projects_df['max_mtd_value'] = top_projects_df[['display_revenue', 'mtd_cost']].max(axis=1)
+        top_projects_df = top_projects_df.nlargest(40, 'max_mtd_value')
+
+        st.session_state.top_projects_df = top_projects_df
 
     # Initialise session state for showing/hiding adjustments
     if 'show_adjustments' not in st.session_state:
@@ -327,7 +337,7 @@ def main():
     # Use the dataframe from session state
     st.markdown("---")
 
-    col1, _, col2, _, col3 = st.columns([3, 1, 3, 1, 3])
+    col1, _, col2, _, col3 = st.columns([5, 1, 2, 1, 2])
     with col1:
         st.toggle("Show Adjustments", key="show_adjustments")
         if st.session_state.show_adjustments:
@@ -345,42 +355,41 @@ def main():
     with col3:
         st.button("Recalculate Adjustments", type="primary", on_click=calculate_revenue_adj)
 
-    # Summary Section
+    st.markdown('---')
     summary_metrics_component()
 
-    #st.markdown('---')
-
-    # Bar Chart Section as Fragment
+    st.markdown('---')
     charts_component()
 
-    ###
     st.markdown('---')
     # st.dataframe(project_data_df, use_container_width=True)
     
     # Top Projects Analysis with Budget Adjustments
     st.header('Top Projects - Analysis & Budget Adjustments')
-    st.markdown('The following projects are ranked by their highest MTD Revenue or MTD Cost values. Adjust budgets using the sliders - all calculations will update automatically.')
+    col1, _, col2 = st.columns([7,1,3])
+    with col1:
+        st.markdown('The following projects are ranked by their highest MTD Revenue or MTD Cost values. Adjust budgets using the sliders - all calculations will update automatically.')
+    with col2:
+        # user inputs for top N projects
+        st.session_state.top_n_projects = st.selectbox(
+            label='Select number of top projects to display',
+            options=[10, 15, 20],
+        )
 
-    # user inputs for top N projects
-    st.session_state.top_n_projects = st.selectbox(
-        label='Select number of top projects to display',
-        options=[10, 15, 20],
-    )
+    st.markdown('---')
 
     # Sort by either MTD revenue or MTD costs (whichever is higher for each project)
-    ranked_projects = original_project_df.copy()
+    top_projects_df = st.session_state.top_projects_df
 
     if st.session_state.type_filter == FilterType.CAPITAL.value:
-        ranked_projects = ranked_projects[ranked_projects['is_capital']]
+        top_projects_df = top_projects_df[top_projects_df['is_capital']]
     elif st.session_state.type_filter == FilterType.ACS.value:
-        ranked_projects = ranked_projects[~ranked_projects['is_capital']]
+        top_projects_df = top_projects_df[~top_projects_df['is_capital']]
 
-    ranked_projects['display_revenue'] = (ranked_projects['mtd_revenue'] + ranked_projects['revenue_adj']).abs()
-    ranked_projects['max_mtd_value'] = ranked_projects[['display_revenue', 'mtd_cost']].max(axis=1)
-    ranked_projects = ranked_projects.nlargest(st.session_state.top_n_projects, 'max_mtd_value')
+    top_projects_df = top_projects_df.nlargest(st.session_state.top_n_projects, 'max_mtd_value')
 
     # Display each project using the component
-    for index, project_row in ranked_projects.iterrows():
+    for index, project_row in top_projects_df.iterrows():
         significant_project_component(project_row['project_key'])
 
 
@@ -388,9 +397,13 @@ def main():
     st.markdown('---')
 
     # Raw Data Section (expandable)
-    with st.expander('📋 View Raw Data'):
-        st.dataframe(project_data_df, use_container_width=True)
-    
+    with st.expander('View Raw Data'):
+        cols = ['project_code','project_name','project_manager','functional_area','mtd_revenue','mtd_direct_cost','mtd_oh',
+                'ltd_cost','prj_budgeted_cost','prj_forecast','percentage_completion',
+                'ltd_billed_revenue','ltd_deferred_revenue','revenue_adj','contracted_revenue']
+
+        st.dataframe(project_data_df[cols], use_container_width=True)
+
 
 if __name__ == '__main__':
     main()
